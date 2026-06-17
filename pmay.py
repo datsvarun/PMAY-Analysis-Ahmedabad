@@ -2,7 +2,7 @@ import json
 import numpy as np
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
+import altair as alt
 import folium
 from folium.plugins import HeatMap
 from streamlit_folium import st_folium
@@ -458,35 +458,36 @@ corr_matrix = pd.DataFrame(
     index=corr_vars,
     columns=corr_vars,
 )
-corr_vals = corr_matrix.values.tolist()
 short_labels = [
     "Change_Area", "Slum_DU_14", "Slum_Pop_14", "Slum_Area_14",
     "Slum_DU_24", "Slum_Pop_24", "Slum_Area_24",
     "Market_Rate", "Chg_10Y", "Chg_HH", "Chg_Pop",
 ]
-hover_text = [
-    [f"{corr_vars[r]}<br>{corr_vars[c]}<br>r = {corr_vals[r][c]:.2f}"
-     for c in range(len(corr_vars))]
-    for r in range(len(corr_vars))
-]
-fig_corr = go.Figure(go.Heatmap(
-    z=corr_vals,
-    x=short_labels,
-    y=short_labels,
-    text=[[f"{v:.2f}" for v in row] for row in corr_vals],
-    texttemplate="%{text}",
-    hovertext=hover_text,
-    hoverinfo="text",
-    colorscale="RdYlGn",
-    zmin=-1, zmax=1,
-    colorbar=dict(title="r"),
-))
-fig_corr.update_layout(
-    height=480,
-    margin=dict(l=10, r=10, t=10, b=10),
-    xaxis=dict(tickangle=-30),
+label_map = dict(zip(corr_vars, short_labels))
+corr_matrix.index = short_labels
+corr_matrix.columns = short_labels
+corr_long = (
+    corr_matrix.reset_index()
+    .melt(id_vars="index", var_name="Variable2", value_name="r")
+    .rename(columns={"index": "Variable1"})
 )
-st.plotly_chart(fig_corr, use_container_width=True)
+full_map = dict(zip(short_labels, corr_vars))
+corr_long["Full1"] = corr_long["Variable1"].map(full_map)
+corr_long["Full2"] = corr_long["Variable2"].map(full_map)
+
+heat = alt.Chart(corr_long).mark_rect().encode(
+    x=alt.X("Variable1:O", sort=short_labels, title=None, axis=alt.Axis(labelAngle=-40)),
+    y=alt.Y("Variable2:O", sort=short_labels, title=None),
+    color=alt.Color("r:Q", scale=alt.Scale(scheme="redyellowgreen", domain=[-1, 1]), legend=alt.Legend(title="r")),
+    tooltip=[alt.Tooltip("Full1:N", title="Variable 1"), alt.Tooltip("Full2:N", title="Variable 2"), alt.Tooltip("r:Q", title="Correlation", format=".2f")],
+)
+labels = alt.Chart(corr_long).mark_text(fontSize=9).encode(
+    x=alt.X("Variable1:O", sort=short_labels),
+    y=alt.Y("Variable2:O", sort=short_labels),
+    text=alt.Text("r:Q", format=".2f"),
+    color=alt.condition("abs(datum.r) > 0.65", alt.value("white"), alt.value("black")),
+)
+st.altair_chart(alt.layer(heat, labels).properties(height=400), use_container_width=True)
 
 st.divider()
 
@@ -513,35 +514,25 @@ m_coef, b_coef = np.polyfit(fit_df["Change_Area"], fit_df["Pct_Change"], 1)
 x_line = np.linspace(reg_df["Change_Area"].min(), reg_df["Change_Area"].max(), 200)
 y_line = m_coef * x_line + b_coef
 
-fig = go.Figure()
-fig.add_trace(go.Scatter(
-    x=reg_df["Change_Area"],
-    y=reg_df["Pct_Change"],
-    mode="markers",
-    marker=dict(color="#4472C4", size=8),
-    text=reg_df["Name"],
-    hovertemplate="<b>%{text}</b><br>Change in Slum Area: %{x:,.0f} sqm<br>10Y Property Change: %{y:.1f}%<extra></extra>",
-))
-fig.add_trace(go.Scatter(
-    x=x_line,
-    y=y_line,
-    mode="lines",
-    line=dict(color="#4472C4", width=1.5),
-    hoverinfo="skip",
-    showlegend=False,
-))
-fig.update_layout(
-    title="HPI to Affordable Housing Index (2021–2011)",
-    xaxis_title="Change in Slum Area (sq m)",
-    yaxis_title="% Change in Property Rate (10Y)",
-    plot_bgcolor="white",
-    paper_bgcolor="white",
-    showlegend=False,
-    xaxis=dict(showgrid=True, gridcolor="#e0e0e0", zeroline=True, zerolinecolor="#aaa"),
-    yaxis=dict(showgrid=True, gridcolor="#e0e0e0", zeroline=True, zerolinecolor="#aaa"),
-    height=450,
+trend_df = pd.DataFrame({"Change_Area": x_line, "Pct_Change": y_line})
+
+scatter = alt.Chart(reg_df).mark_circle(color="#4472C4", size=70, opacity=0.85).encode(
+    x=alt.X("Change_Area:Q", title="Change in Slum Area (sq m)", axis=alt.Axis(format="~s")),
+    y=alt.Y("Pct_Change:Q", title="% Change in Property Rate (10Y)"),
+    tooltip=[
+        alt.Tooltip("Name:N", title="Ward"),
+        alt.Tooltip("Change_Area:Q", title="Slum Area Change (sq m)", format=",.0f"),
+        alt.Tooltip("Pct_Change:Q", title="10Y Change (%)", format=".1f"),
+    ],
 )
-st.plotly_chart(fig, use_container_width=True)
+trend_line = alt.Chart(trend_df).mark_line(color="#4472C4", strokeWidth=2).encode(
+    x="Change_Area:Q",
+    y="Pct_Change:Q",
+)
+st.altair_chart(
+    (scatter + trend_line).properties(title="HPI to Affordable Housing Index (2021–2011)", height=420),
+    use_container_width=True,
+)
 
 ols_c1, ols_c2 = st.columns(2)
 with ols_c1:
